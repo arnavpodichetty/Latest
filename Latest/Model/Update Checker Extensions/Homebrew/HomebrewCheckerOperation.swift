@@ -103,10 +103,10 @@ class HomebrewUpdateOperation: UpdateOperation, @unchecked Sendable {
 		}
 	}
 
-	/// Location of the brew executable (Apple silicon first, then Intel). Apps launched from Finder don't inherit the shell PATH.
 	/// Makes sure only one brew update runs at a time.
 	private static let brewLock = DispatchSemaphore(value: 1)
 
+	/// Location of the brew executable (Apple silicon first, then Intel). Apps launched from Finder don't inherit the shell PATH.
 	static var brewURL: URL? {
 		["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
 			.map { URL(fileURLWithPath: $0) }
@@ -122,6 +122,9 @@ class HomebrewUpdateOperation: UpdateOperation, @unchecked Sendable {
 	/// The currently running brew process, kept so it can be cancelled.
 	private var process: Process?
 	private let processLock = NSLock()
+	
+	/// Whether cancelling may stop the running brew process. Turned off once brew starts replacing the app.
+	private var canTerminateProcess = true
 
 	init(bundleIdentifier: String, appIdentifier: App.Bundle.Identifier, caskToken: String, appURL: URL) {
 		self.caskToken = caskToken
@@ -151,44 +154,50 @@ class HomebrewUpdateOperation: UpdateOperation, @unchecked Sendable {
 				// Is the app already managed by Homebrew?
 				let isManaged = try self.run(brew, ["list", "--cask", self.caskToken]).status == 0
 				guard !self.isCancelled else { return self.finish() }
-
+				
 				// Quit the app right before replacing it, so it isn't closed for nothing if the check above fails.
 				self.progressState = .installing
 				guard let wasRunning = self.quitAppIfRunning() else {
 					self.finish(with: HomebrewError.appStillRunning(name: self.appURL.deletingPathExtension().lastPathComponent))
 					return
 				}
+				
+				// Reopen the app afterwards if it was open, whether or not the update worked.
+				defer {
+					if wasRunning {
+						NSWorkspace.shared.openApplication(at: self.appURL, configuration: NSWorkspace.OpenConfiguration())
+					}
+				}
 				guard !self.isCancelled else { return self.finish() }
-
+				
 				let arguments = isManaged
 					? ["upgrade", "--cask", "--greedy", self.caskToken]
 					: ["install", "--cask", "--force", "--appdir=\(self.appURL.deletingLastPathComponent().path)", self.caskToken]
-
+				
+				// From here on, cancelling no longer stops brew: stopping it halfway could leave the app deleted.
+				self.processLock.withCriticalScope { self.canTerminateProcess = false }
+				
 				let result = try self.run(brew, arguments)
-				guard !self.isCancelled else { return self.finish() }
-
 				guard result.status == 0 else {
 					self.finish(with: HomebrewError.commandFailed(output: result.output))
 					return
 				}
-
-				if wasRunning {
-					NSWorkspace.shared.openApplication(at: self.appURL, configuration: NSWorkspace.OpenConfiguration())
-				}
-
+				
 				self.finish()
 			} catch {
 				self.finish(with: error)
 			}
 		}
 	}
-
+	
 	override func cancel() {
-		processLock.withCriticalScope { process?.terminate() }
+		processLock.withCriticalScope {
+			if canTerminateProcess { process?.terminate() }
+		}
 		super.cancel()
 	}
-
-
+	
+	
 	// MARK: - Helpers
 
 	/// Runs brew with the given arguments and returns its exit status and combined output.
@@ -201,7 +210,6 @@ class HomebrewUpdateOperation: UpdateOperation, @unchecked Sendable {
 		environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 		environment["HOMEBREW_NO_ENV_HINTS"] = "1"
 		environment["HOMEBREW_NO_INSTALL_CLEANUP"] = "1"
-		environment["HOMEBREW_NO_AUTO_UPDATE"] = "1"
 		process.environment = environment
 
 		let pipe = Pipe()

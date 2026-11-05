@@ -96,7 +96,10 @@ class UpdateCheckCoordinator {
 	/// Performs the update check on the given bundles.
 	private func runUpdateCheck(on bundles: [App.Bundle]) {
 		let repository = UpdateRepository.newRepository()
-		let operations = bundles.compactMap { bundle in
+		let operations = bundles.compactMap { bundle -> UpdateCheckerOperation? in
+			// Fork change: never offer to update this app itself, since that would replace it with the official version.
+			guard bundle.bundleIdentifier != Bundle.main.bundleIdentifier else { return nil }
+
 			return Self.operation(forChecking: bundle, repository: repository) { result in
 				self.didCheck(bundle, result)
 			}

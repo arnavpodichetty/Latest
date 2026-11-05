@@ -25,7 +25,7 @@
                                                 <action selector="orderFrontStandardAboutPanel:" target="Ady-hI-5gd" id="Exp-CZ-Vem"/>
                                             </connections>
                                         </menuItem>
-                                        <menuItem title="Check for Updates…" id="4vf-ia-dzo">
+                                        <menuItem title="Check for Updates…" hidden="YES" id="4vf-ia-dzo">
                                             <modifierMask key="keyEquivalentModifierMask"/>
                                             <connections>
                                                 <action selector="checkForUpdates:" target="ZIQ-oE-e1U" id="6ax-If-3sD"/>
